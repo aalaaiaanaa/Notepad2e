@@ -194,6 +194,7 @@
     <ClCompile Include="scintilla\lexers\LexA68k.cxx" />
     <ClCompile Include="scintilla\lexers\LexAbaqus.cxx" />
     <ClCompile Include="scintilla\lexers\LexAda.cxx" />
+    <ClCompile Include="scintilla\lexers\LexAHK.cxx" />
     <ClCompile Include="scintilla\lexers\LexAPDL.cxx" />
     <ClCompile Include="scintilla\lexers\LexAsn1.cxx" />
     <ClCompile Include="scintilla\lexers\LexASY.cxx" />
