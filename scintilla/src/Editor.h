@@ -258,7 +258,6 @@ protected:	// ScintillaBase subclass needs access to much of Editor
 	WrapPending wrapPending;
 
 	bool convertPastes;
-	bool skipUIUpdate;
 
 	Editor();
 	virtual ~Editor();
@@ -441,8 +440,6 @@ protected:	// ScintillaBase subclass needs access to much of Editor
 	void NotifyNeedShown(int pos, int len);
 	void NotifyDwelling(Point pt, bool state);
 	void NotifyZoom();
-	void NotifyCaretMoved();
-	void NotifyLineCountChanged();
 
 	void NotifyModifyAttempt(Document *document, void *userData);
 	void NotifySavePoint(Document *document, void *userData, bool atSavePoint);

@@ -40,7 +40,6 @@ protected:
 
 	enum { maxLenInputIME = 200 };
 
-	bool moveCaretOnRClick;
 	bool displayPopupMenu;
 	Menu popup;
 	AutoComplete ac;

@@ -19,9 +19,9 @@ using namespace Scintilla;
 namespace Scintilla {
 #endif
 
-unsigned int UTF8Length(const wchar_t *uptr, unsigned int tlen, const bool processNULL) {
+unsigned int UTF8Length(const wchar_t *uptr, unsigned int tlen) {
 	unsigned int len = 0;
-	for (unsigned int i = 0; i < tlen && (uptr[i] || processNULL);) {
+	for (unsigned int i = 0; i < tlen && uptr[i];) {
 		unsigned int uch = uptr[i];
 		if (uch < 0x80) {
 			len++;
@@ -39,9 +39,9 @@ unsigned int UTF8Length(const wchar_t *uptr, unsigned int tlen, const bool proce
 	return len;
 }
 
-void UTF8FromUTF16(const wchar_t *uptr, unsigned int tlen, char *putf, unsigned int len, const bool processNULL) {
+void UTF8FromUTF16(const wchar_t *uptr, unsigned int tlen, char *putf, unsigned int len) {
 	unsigned int k = 0;
-	for (unsigned int i = 0; i < tlen && (uptr[i] || processNULL);) {
+	for (unsigned int i = 0; i < tlen && uptr[i];) {
 		unsigned int uch = uptr[i];
 		if (uch < 0x80) {
 			putf[k++] = static_cast<char>(uch);

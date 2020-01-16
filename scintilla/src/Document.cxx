@@ -110,8 +110,6 @@ Document::Document() {
 	tabIndents = true;
 	backspaceUnindents = false;
 	durationStyleOneLine = 0.00001;
-	// [2e]: ctrl+arrow behavior toggle #89
-	wordNavigationMode = 0;
 
 	matchesValid = false;
 	regex = 0;
@@ -1522,106 +1520,20 @@ int Document::ExtendWordSelect(int pos, int delta, bool onlyWordCharacters) {
  */
 int Document::NextWordStart(int pos, int delta) {
 	if (delta < 0) {
-		// [2e]: ctrl+arrow behavior toggle #89
-		switch (wordNavigationMode)
-		{
-		case 0:
-			// standard navigation
-			while (pos > 0 && (WordCharClass(cb.CharAt(pos - 1)) == CharClassify::ccSpace))
+		while (pos > 0 && (WordCharClass(cb.CharAt(pos - 1)) == CharClassify::ccSpace))
+			pos--;
+		if (pos > 0) {
+			CharClassify::cc ccStart = WordCharClass(cb.CharAt(pos-1));
+			while (pos > 0 && (WordCharClass(cb.CharAt(pos - 1)) == ccStart)) {
 				pos--;
-			if (pos > 0)
-			{
-				CharClassify::cc ccStart = WordCharClass(cb.CharAt(pos - 1));
-				while (pos > 0 && (WordCharClass(cb.CharAt(pos - 1)) == ccStart))
-					pos--;
 			}
-			break;
-		case 1:
-			// [2e]: ctrl+arrow behavior toggle #89
-			// accelerated navigation
-			{
-				if (pos > 0)
-				{
-					pos--;
-				}
-				bool stopAtCurrentNewLine = false;
-				while ((pos >= 0) && (WordCharClass(cb.CharAt(pos)) == CharClassify::ccNewLine))
-				{
-					pos--;
-					stopAtCurrentNewLine = true;
-				}
-				if (stopAtCurrentNewLine)
-				{
-					pos++;
-				}
-				else
-				{
-					CharClassify::cc ccCurrent = WordCharClass(cb.CharAt(pos));
-					while (pos > 0)
-					{
-						CharClassify::cc ccPrev = WordCharClass(cb.CharAt(pos - 1));
-						if ((ccPrev == CharClassify::ccNewLine)
-							|| ((ccPrev == CharClassify::ccSpace) && (ccCurrent != CharClassify::ccSpace)))
-							break;
-						pos--;
-						ccCurrent = ccPrev;
-					}
-				}
-			}
-			break;
-			// [/2e]
-		default:
-			// not implemented
-			PLATFORM_ASSERT(false);
-			break;
 		}
 	} else {
-		// [2e]: ctrl+arrow behavior toggle #89
-		switch (wordNavigationMode)
-		{
-		case 0:
-			// standard navigation
-			{
-				CharClassify::cc ccStart = WordCharClass(cb.CharAt(pos));
-				while (pos < (Length()) && (WordCharClass(cb.CharAt(pos)) == ccStart))
-					pos++;
-				while (pos < (Length()) && (WordCharClass(cb.CharAt(pos)) == CharClassify::ccSpace))
-					pos++;
-			}
-			break;
-		case 1:
-			// [2e]: ctrl+arrow behavior toggle #89
-			// accelerated navigation
-			{
-				bool stopAtCurrentNewLine = false;
-				while ((pos < Length()) && (WordCharClass(cb.CharAt(pos)) == CharClassify::ccNewLine))
-				{
-					pos++;
-					stopAtCurrentNewLine = true;
-				}
-				if (!stopAtCurrentNewLine)
-				{
-					pos++;
-					assert(pos > 0);
-					CharClassify::cc ccPrev = WordCharClass(cb.CharAt(pos - 1));
-					while (pos < Length())
-					{
-						CharClassify::cc ccCurrent = WordCharClass(cb.CharAt(pos));
-						if ((ccCurrent == CharClassify::ccNewLine)
-							|| ((ccPrev == CharClassify::ccSpace) && (ccCurrent != CharClassify::ccSpace)))
-							break;
-						pos++;
-						ccPrev = ccCurrent;
-					}
-				}
-			}
-			break;
-			// [/2e]
-		default:
-			// not implemented
-			PLATFORM_ASSERT(false);
-			break;
-		}
+		CharClassify::cc ccStart = WordCharClass(cb.CharAt(pos));
+		while (pos < (Length()) && (WordCharClass(cb.CharAt(pos)) == ccStart))
+			pos++;
+		while (pos < (Length()) && (WordCharClass(cb.CharAt(pos)) == CharClassify::ccSpace))
+			pos++;
 	}
 	return pos;
 }
@@ -2328,13 +2240,6 @@ int Document::BraceMatch(int position, int /*maxReStyle*/) {
 	return - 1;
 }
 
-// [2e]: ctrl+arrow behavior toggle #89
-void Document::SetWordNavigationMode(const int iMode)
-{
-	wordNavigationMode = iMode;
-}
-// [/2e]
-
 /**
  * Implementation of RegexSearchBase for the default built-in regular expression engine
  */
@@ -2357,6 +2262,59 @@ private:
 };
 
 namespace {
+
+/**
+* RESearchRange keeps track of search range.
+*/
+class RESearchRange {
+public:
+	const Document *doc;
+	int increment;
+	int startPos;
+	int endPos;
+	int lineRangeStart;
+	int lineRangeEnd;
+	int lineRangeBreak;
+	RESearchRange(const Document *doc_, int minPos, int maxPos) : doc(doc_) {
+		increment = (minPos <= maxPos) ? 1 : -1;
+
+		// Range endpoints should not be inside DBCS characters, but just in case, move them.
+		startPos = doc->MovePositionOutsideChar(minPos, 1, false);
+		endPos = doc->MovePositionOutsideChar(maxPos, 1, false);
+
+		lineRangeStart = doc->LineFromPosition(startPos);
+		lineRangeEnd = doc->LineFromPosition(endPos);
+		if ((increment == 1) &&
+			(startPos >= doc->LineEnd(lineRangeStart)) &&
+			(lineRangeStart < lineRangeEnd)) {
+			// the start position is at end of line or between line end characters.
+			lineRangeStart++;
+			startPos = doc->LineStart(lineRangeStart);
+		} else if ((increment == -1) &&
+			(startPos <= doc->LineStart(lineRangeStart)) &&
+			(lineRangeStart > lineRangeEnd)) {
+			// the start position is at beginning of line.
+			lineRangeStart--;
+			startPos = doc->LineEnd(lineRangeStart);
+		}
+		lineRangeBreak = lineRangeEnd + increment;
+	}
+	Range LineRange(int line) const {
+		Range range(doc->LineStart(line), doc->LineEnd(line));
+		if (increment == 1) {
+			if (line == lineRangeStart)
+				range.start = startPos;
+			if (line == lineRangeEnd)
+				range.end = endPos;
+		} else {
+			if (line == lineRangeEnd)
+				range.start = endPos;
+			if (line == lineRangeStart)
+				range.end = startPos;
+		}
+		return range;
+	}
+};
 
 // Define a way for the Regular Expression code to access the document
 class DocumentIndexer : public CharacterIndexer {
