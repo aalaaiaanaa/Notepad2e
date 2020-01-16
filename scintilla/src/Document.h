@@ -251,6 +251,8 @@ public:
 	bool tabIndents;
 	bool backspaceUnindents;
 	double durationStyleOneLine;
+	// [2e]: ctrl+arrow behavior toggle #89
+	int wordNavigationMode;
 
 	DecorationList decorations;
 
@@ -447,6 +449,8 @@ public:
 	int ParaDown(int pos) const;
 	int IndentSize() const { return actualIndentInChars; }
 	int BraceMatch(int position, int maxReStyle);
+	// [2e]: ctrl+arrow behavior toggle #89
+	void SetWordNavigationMode(const int iMode);
 
 private:
 	void NotifyModifyAttempt();
@@ -534,6 +538,59 @@ public:
 	virtual void NotifyStyleNeeded(Document *doc, void *userData, int endPos) = 0;
 	virtual void NotifyLexerChanged(Document *doc, void *userData) = 0;
 	virtual void NotifyErrorOccurred(Document *doc, void *userData, int status) = 0;
+};
+
+/**
+* RESearchRange keeps track of search range.
+*/
+class RESearchRange {
+public:
+	const Document *doc;
+	int increment;
+	int startPos;
+	int endPos;
+	int lineRangeStart;
+	int lineRangeEnd;
+	int lineRangeBreak;
+	RESearchRange(const Document *doc_, int minPos, int maxPos) : doc(doc_) {
+		increment = (minPos <= maxPos) ? 1 : -1;
+
+		// Range endpoints should not be inside DBCS characters, but just in case, move them.
+		startPos = doc->MovePositionOutsideChar(minPos, 1, false);
+		endPos = doc->MovePositionOutsideChar(maxPos, 1, false);
+
+		lineRangeStart = doc->LineFromPosition(startPos);
+		lineRangeEnd = doc->LineFromPosition(endPos);
+		if ((increment == 1) &&
+			(startPos >= doc->LineEnd(lineRangeStart)) &&
+			(lineRangeStart < lineRangeEnd)) {
+			// the start position is at end of line or between line end characters.
+			lineRangeStart++;
+			startPos = doc->LineStart(lineRangeStart);
+		} else if ((increment == -1) &&
+			(startPos <= doc->LineStart(lineRangeStart)) &&
+			(lineRangeStart > lineRangeEnd)) {
+			// the start position is at beginning of line.
+			lineRangeStart--;
+			startPos = doc->LineEnd(lineRangeStart);
+		}
+		lineRangeBreak = lineRangeEnd + increment;
+	}
+	Range LineRange(int line) const {
+		Range range(doc->LineStart(line), doc->LineEnd(line));
+		if (increment == 1) {
+			if (line == lineRangeStart)
+				range.start = startPos;
+			if (line == lineRangeEnd)
+				range.end = endPos;
+		} else {
+			if (line == lineRangeEnd)
+				range.start = endPos;
+			if (line == lineRangeStart)
+				range.end = startPos;
+		}
+		return range;
+	}
 };
 
 #ifdef SCI_NAMESPACE

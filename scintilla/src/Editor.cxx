@@ -184,6 +184,7 @@ Editor::Editor() {
 	foldAutomatic = 0;
 
 	convertPastes = true;
+	skipUIUpdate = false;
 
 	SetRepresentations();
 }
@@ -449,6 +450,9 @@ bool Editor::AbandonPaint() {
 
 void Editor::RedrawRect(PRectangle rc) {
 	//Platform::DebugPrintf("Redraw %0d,%0d - %0d,%0d\n", rc.left, rc.top, rc.right, rc.bottom);
+	if (skipUIUpdate) {
+		return;
+	}
 
 	// Clip the redraw rectangle into the client area
 	PRectangle rcClient = GetClientRectangle();
@@ -472,6 +476,10 @@ void Editor::DiscardOverdraw() {
 
 void Editor::Redraw() {
 	//Platform::DebugPrintf("Redraw all\n");
+	if (skipUIUpdate) {
+		return;
+	}
+
 	PRectangle rcClient = GetClientRectangle();
 	wMain.InvalidateRectangle(rcClient);
 	if (wMargin.GetID())
@@ -596,6 +604,10 @@ void Editor::ThinRectangularRange() {
 }
 
 void Editor::InvalidateSelection(SelectionRange newMain, bool invalidateWholeSelection) {
+	if (skipUIUpdate) {
+		return;
+	}
+
 	if (sel.Count() > 1 || !(sel.RangeMain().anchor == newMain.anchor) || sel.IsRectangular()) {
 		invalidateWholeSelection = true;
 	}
@@ -814,8 +826,11 @@ void Editor::MovedCaret(SelectionPosition newPos, SelectionPosition previousPos,
 	const int currentLine = pdoc->LineFromPosition(newPos.Position());
 	if (ensureVisible) {
 		// In case in need of wrapping to ensure DisplayFromDoc works.
-		if (currentLine >= wrapPending.start)
-			WrapLines(wsAll);
+		if (currentLine >= wrapPending.start) {
+			if (WrapLines(wsAll)) {
+				Redraw();
+			}      
+		}
 		XYScrollPosition newXY = XYScrollToMakeVisible(
 			SelectionRange(posDrag.IsValid() ? posDrag : newPos), xysDefault);
 		if (previousPos.IsValid() && (newXY.xOffset == xOffset)) {
@@ -1381,6 +1396,10 @@ void Editor::ScrollRange(SelectionRange range) {
 }
 
 void Editor::EnsureCaretVisible(bool useMargin, bool vert, bool horiz) {
+	if (skipUIUpdate) {
+		return;
+	}
+
 	SetXYScroll(XYScrollToMakeVisible(SelectionRange(posDrag.IsValid() ? posDrag : sel.RangeMain().caret),
 		static_cast<XYScrollOptions>((useMargin?xysUseMargin:0)|(vert?xysVertical:0)|(horiz?xysHorizontal:0))));
 }
@@ -1428,6 +1447,10 @@ void Editor::CaretSetPeriod(int period) {
 }
 
 void Editor::InvalidateCaret() {
+	if (skipUIUpdate) {
+		return;
+	}
+
 	if (posDrag.IsValid()) {
 		InvalidateRange(posDrag.Position(), posDrag.Position() + 1);
 	} else {
@@ -1439,6 +1462,10 @@ void Editor::InvalidateCaret() {
 }
 
 void Editor::NotifyCaretMove() {
+	// Send notification
+	SCNotification scn = { 0 };
+	scn.nmhdr.code = SCN_CARETMOVED;
+	NotifyParent(scn);
 }
 
 void Editor::UpdateSystemCaret() {
@@ -1687,6 +1714,10 @@ void Editor::RefreshPixMaps(Surface *surfaceWindow) {
 }
 
 void Editor::Paint(Surface *surfaceWindow, PRectangle rcArea) {
+	if (skipUIUpdate) {
+		return;
+	}
+
 	//Platform::DebugPrintf("Paint:%1d (%3d,%3d) ... (%3d,%3d)\n",
 	//	paintingAllText, rcArea.left, rcArea.top, rcArea.right, rcArea.bottom);
 	AllocateGraphics();
@@ -2481,6 +2512,14 @@ void Editor::NotifyZoom() {
 	SCNotification scn = {};
 	scn.nmhdr.code = SCN_ZOOM;
 	NotifyParent(scn);
+}
+
+void Editor::NotifyLineCountChanged()
+{
+  // Send notification
+  SCNotification scn = { 0 };
+  scn.nmhdr.code = SCN_LINECOUNTCHANGED;
+  NotifyParent(scn);
 }
 
 // Notifications from document
@@ -3727,6 +3766,7 @@ int Editor::KeyCommand(unsigned int iMessage) {
 		break;
 	case SCI_NEWLINE:
 		NewLine();
+		NotifyLineCountChanged();
 		break;
 	case SCI_FORMFEED:
 		AddChar('\f');
@@ -3775,6 +3815,7 @@ int Editor::KeyCommand(unsigned int iMessage) {
 			int start = pdoc->LineStart(line);
 			int end = pdoc->LineStart(line + 1);
 			pdoc->DeleteChars(start, end - start);
+			NotifyLineCountChanged();
 		}
 		break;
 	case SCI_LINETRANSPOSE:
@@ -3782,9 +3823,11 @@ int Editor::KeyCommand(unsigned int iMessage) {
 		break;
 	case SCI_LINEDUPLICATE:
 		Duplicate(true);
+		NotifyLineCountChanged();
 		break;
 	case SCI_SELECTIONDUPLICATE:
 		Duplicate(false);
+		NotifyLineCountChanged();
 		break;
 	case SCI_LOWERCASE:
 		ChangeCaseOfSelection(cmLower);
@@ -3857,12 +3900,32 @@ void Editor::Indent(bool forwards) {
 					}
 				}
 			} else {
-				if (pdoc->GetColumn(caretPosition) <= pdoc->GetLineIndentation(lineCurrentPos) &&
-						pdoc->tabIndents) {
-					int indentation = pdoc->GetLineIndentation(lineCurrentPos);
-					int indentationStep = pdoc->IndentSize();
-					const int posSelect = pdoc->SetLineIndentation(lineCurrentPos, indentation - indentationStep);
-					sel.Range(r) = SelectionRange(posSelect);
+				if (pdoc->tabIndents) {
+					SelectionPosition posCaret(sel.Range(r).caret.Position());
+					SelectionPosition posAnchor(sel.Range(r).anchor.Position());
+					const int indentation = pdoc->GetLineIndentation(lineCurrentPos);
+					const int indentationStep = pdoc->IndentSize();
+					bool adjustCaretPosition = false;
+					int tabsCount = 0;
+					if (pdoc->CharAt(pdoc->LineStart(lineCurrentPos)) == '\t') {
+						adjustCaretPosition = true;
+						for (int i = pdoc->LineStart(lineCurrentPos); i < posCaret.Position(); i++) {
+							if (pdoc->CharAt(i) != '\t')
+								break;
+							++tabsCount;
+						}
+					}
+					pdoc->SetLineIndentation(lineCurrentPos, indentation - indentationStep);
+					if (adjustCaretPosition) {
+						const int offset = (pdoc->useTabs ? std::max(1, tabsCount - 1) : tabsCount) * (indentationStep - 1);
+						posCaret.Add(offset);
+						posAnchor.Add(offset);
+					}
+					if ((posCaret.Position() - pdoc->LineStart(lineCurrentPos) >= indentationStep) && (indentation >= indentationStep)) {
+						posCaret.Add(-indentationStep);
+						posAnchor.Add(-indentationStep);
+						sel.Range(r) = SelectionRange(posCaret, posAnchor);
+					}
 				} else {
 					int newColumn = ((pdoc->GetColumn(caretPosition) - 1) / pdoc->tabInChars) *
 							pdoc->tabInChars;
@@ -4200,6 +4263,7 @@ void Editor::DropAt(SelectionPosition position, const char *value, size_t length
 		}
 		position = positionAfterDeletion;
 
+		const int linesTotal = pdoc->LinesTotal();
 		std::string convertedText = Document::TransformLineEnds(value, lengthValue, pdoc->eolMode);
 
 		if (rectangular) {
@@ -4216,6 +4280,9 @@ void Editor::DropAt(SelectionPosition position, const char *value, size_t length
 				posAfterInsertion.Add(lengthInserted);
 				SetSelection(posAfterInsertion, position);
 			}
+		}
+		if (pdoc->LinesTotal() != linesTotal) {
+			NotifyLineCountChanged();
 		}
 	} else if (inDragDrop == ddDragging) {
 		SetEmptySelection(position);
@@ -4434,9 +4501,7 @@ void Editor::ButtonDownWithModifiers(Point pt, unsigned int curTime, int modifie
 					selectionType = selWord;
 					doubleClick = true;
 				} else if (selectionType == selWord) {
-					// Since we ended up here, we're inside a *triple* click, which should always select
-					// whole line regardless of word wrap being enabled or not.
-					selectionType = selWholeLine;
+					// do nothing on *triple* click
 				} else {
 					selectionType = selChar;
 					originalAnchorPos = sel.MainCaret();
@@ -5718,6 +5783,7 @@ sptr_t Editor::WndProc(unsigned int iMessage, uptr_t wParam, sptr_t lParam) {
 	case SCI_CUT:
 		Cut();
 		SetLastXChosen();
+		NotifyLineCountChanged();
 		break;
 
 	case SCI_COPY:
@@ -5754,17 +5820,20 @@ sptr_t Editor::WndProc(unsigned int iMessage, uptr_t wParam, sptr_t lParam) {
 			SetLastXChosen();
 		}
 		EnsureCaretVisible();
+		NotifyLineCountChanged();
 		break;
 
 	case SCI_CLEAR:
 		Clear();
 		SetLastXChosen();
 		EnsureCaretVisible();
+		NotifyLineCountChanged();
 		break;
 
 	case SCI_UNDO:
 		Undo();
 		SetLastXChosen();
+		NotifyLineCountChanged();
 		break;
 
 	case SCI_CANUNDO:
@@ -5868,8 +5937,10 @@ sptr_t Editor::WndProc(unsigned int iMessage, uptr_t wParam, sptr_t lParam) {
 			char *replacement = CharPtrFromSPtr(lParam);
 			const int lengthInserted = pdoc->InsertString(
 				sel.MainCaret(), replacement, istrlen(replacement));
-			SetEmptySelection(sel.MainCaret() + lengthInserted);
-			EnsureCaretVisible();
+			if (!skipUIUpdate) {
+					SetEmptySelection(sel.MainCaret() + lengthInserted);
+					EnsureCaretVisible();
+			}
 		}
 		break;
 
@@ -6044,6 +6115,7 @@ sptr_t Editor::WndProc(unsigned int iMessage, uptr_t wParam, sptr_t lParam) {
 			const int lengthInserted = pdoc->InsertString(
 				CurrentPosition(), CharPtrFromSPtr(lParam), static_cast<int>(wParam));
 			SetEmptySelection(sel.MainCaret() + lengthInserted);
+			NotifyLineCountChanged();
 			return 0;
 		}
 
@@ -6228,6 +6300,7 @@ sptr_t Editor::WndProc(unsigned int iMessage, uptr_t wParam, sptr_t lParam) {
 
 	case SCI_REDO:
 		Redo();
+		NotifyLineCountChanged();
 		break;
 
 	case SCI_SELECTALL:
@@ -8052,6 +8125,14 @@ sptr_t Editor::WndProc(unsigned int iMessage, uptr_t wParam, sptr_t lParam) {
 
 	case SCI_COUNTCHARACTERS:
 		return pdoc->CountCharacters(static_cast<int>(wParam), static_cast<int>(lParam));
+
+	case SCI_SETSKIPUIUPDATE:
+		skipUIUpdate = (wParam != 0);
+		if (!skipUIUpdate) {
+			InvalidateWholeSelection();
+			Redraw();
+		}
+		return skipUIUpdate;
 
 	default:
 		return DefWndProc(iMessage, wParam, lParam);
